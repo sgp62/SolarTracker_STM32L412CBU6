@@ -22,7 +22,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,7 +38,11 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+#define FIND_AND_NUL(s, p, c) ( \
+   (p) = strchr(s, c), \
+   *(p) = '\0', \
+   ++(p), \
+   (p))
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -50,8 +56,20 @@ osThreadId uart2TaskHandle;
 osThreadId spi1TaskHandle;
 osMutexId spi_mutexHandle;
 osSemaphoreId spi_semHandle;
+osSemaphoreId uart_semHandle;
 /* USER CODE BEGIN PV */
 
+// FM25V02A FRAM SPI Commands
+const uint8_t READ = 0b00000011;
+const uint8_t WRITE = 0b00000010;
+const uint8_t WREN = 0b00000110;
+const uint8_t RDSR = 0b00000101;
+const uint8_t WRSR = 0b00000001;
+const uint8_t FSTRD = 0b00001011;
+const uint8_t SLEEP = 0b10111001;
+const uint8_t RDID = 0b10011111;
+
+SerialBuffer SerialBufferReceived;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -65,12 +83,35 @@ void Startuart2Task(void const * argument);
 void startspi1Task(void const * argument);
 
 /* USER CODE BEGIN PFP */
-
+static uint16_t Buffercmp(uint8_t* pBuffer1, uint8_t* pBuffer2, uint16_t BufferLength);
+float GpsToDecimalDegrees(char* nmeaPos, char quadrant);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+QueueHandle_t xQueueSerialDataReceived;
 
+/**
+ * Convert NMEA absolute position to decimal degrees
+ * "ddmm.mmmm" or "dddmm.mmmm" really is D+M/60,
+ * then negated if quadrant is 'W' or 'S'
+ */
+float GpsToDecimalDegrees(char* nmeaPos, char quadrant)
+{
+  float v= 0;
+  if(strlen(nmeaPos)>5)
+  {
+    char integerPart[3+1];
+    int digitCount= (nmeaPos[4]=='.' ? 2 : 3);
+    memcpy(integerPart, nmeaPos, digitCount);
+    integerPart[digitCount]= 0;
+    nmeaPos+= digitCount;
+    v= atoi(integerPart) + atof(nmeaPos)/60.;
+    if(quadrant=='W' || quadrant=='S')
+      v= -v;
+  }
+  return v;
+}
 /* USER CODE END 0 */
 
 /**
@@ -106,6 +147,11 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  //Enable Uart Interrupts
+  HAL_NVIC_SetPriority(USART_GPS_IRQn, 7, 6);
+  HAL_NVIC_EnableIRQ(USART_GPS_IRQn);
+  USART_GPS->CR1 |= USART_CR1_RXNEIE; // Enable Interrupt
+
   /* USER CODE END 2 */
 
   /* Create the mutex(es) */
@@ -120,7 +166,11 @@ int main(void)
   /* Create the semaphores(s) */
   /* definition and creation of spi_sem */
   osSemaphoreDef(spi_sem);
-  spi_semHandle = osSemaphoreCreate(osSemaphore(spi_sem), 2);
+  spi_semHandle = osSemaphoreCreate(osSemaphore(spi_sem), 1);
+
+  /* definition and creation of uart_sem */
+  osSemaphoreDef(uart_sem);
+  uart_semHandle = osSemaphoreCreate(osSemaphore(uart_sem), 1);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -132,6 +182,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+  xQueueSerialDataReceived = xQueueCreate( 2, sizeof( SerialBuffer) );
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -245,7 +296,7 @@ static void MX_SPI1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN SPI1_Init 2 */
-
+  SPI1->CR1 |= SPI_CR1_SSM;
   /* USER CODE END SPI1_Init 2 */
 
 }
@@ -352,7 +403,39 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void USART_GPS_IRQHandler(void) // Sync and Queue NMEA Sentences
+{
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	static char rx_buffer[LINEMAX + 1]; // Local holding buffer to build line, w/NUL
+	static int rx_index = 0;
+	if (USART_GPS->ISR & USART_ISR_ORE) // Overrun Error
+		USART_GPS->ICR = USART_ICR_ORECF;
+	if (USART_GPS->ISR & USART_ISR_NE) // Noise Error
+		USART_GPS->ICR = USART_ICR_NCF;
+	if (USART_GPS->ISR & USART_ISR_FE) // Framing Error
+		USART_GPS->ICR = USART_ICR_FECF;
+	if (USART_GPS->ISR & USART_ISR_RXNE) // Received character?
+	{
+		char rx = (char)(USART_GPS->RDR & 0xFF);
+		if ((rx == '\r') || (rx == '\n')) // Is this an end-of-line condition, either will suffice?
+		{
+			if (rx_index != 0) // Line has some content?
+			{
+				rx_buffer[rx_index++] = 0; // Add NUL if required down stream
+				//QueueBuffer(rx_buffer, rx_index); // Copy to queue from live dynamic receive buffer
+				xQueueSendFromISR(xQueueSerialDataReceived,(void *)&rx_buffer,&xHigherPriorityTaskWoken);
+				rx_index = 0; // Reset content pointer
+				got_nmea = 1;
+			}
+		}
+		else
+		{
+			if ((rx == '$') || (rx_index == LINEMAX)) // If resync or overflows pull back to start
+				rx_index = 0;
+			rx_buffer[rx_index++] = rx; // Copy to buffer and increment
+		}
+	}
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_Startuart1Task */
@@ -383,11 +466,55 @@ void Startuart1Task(void const * argument)
 void Startuart2Task(void const * argument)
 {
   /* USER CODE BEGIN Startuart2Task */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+	static uint8_t valid_count = 0;
+	float latitude, longitude;
+
+	char* message_id, *time, *data_valid, *raw_latitude, *raw_longitude, *latdir, *longdir;
+
+	/* Infinite loop */
+	for(;;)
+	{
+	  if(uxQueueMessagesWaitingFromISR(xQueueSerialDataReceived)>0)
+	  {
+		  if(valid_count == 0) {
+			  //osSemaphoreAcquire(UART_semHandle, osWaitForever); //Grab semaphore for new message
+			  xSemaphoreTake(uart_semHandle, portMAX_DELAY);
+		  }
+
+		  xQueueReceive(xQueueSerialDataReceived,&(SerialBufferReceived),1);
+		  valid_count++;
+		  //Fill and check header
+		  for(int c = 0; c < 6; c++){
+			  nmea_header[c] = SerialBufferReceived.Buffer[c];
+		  }
+		  if(!strcmp(nmea_header, "$GPRMC")){
+			  if(SerialBufferReceived.Buffer[18] == 'A'){
+				  //Got a fix0000
+				  message_id = SerialBufferReceived.Buffer;
+				  time = FIND_AND_NUL(message_id, time, ',');
+				  data_valid = FIND_AND_NUL(time, data_valid, ',');
+				  raw_latitude = FIND_AND_NUL(data_valid, raw_latitude, ',');
+				  latdir = FIND_AND_NUL(raw_latitude, latdir, ',');
+				  raw_longitude = FIND_AND_NUL(latdir, raw_longitude, ',');
+				  longdir = FIND_AND_NUL(raw_longitude, longdir, ',');
+
+				  latitude = GpsToDecimalDegrees(raw_latitude, *latdir);
+				  longitude = GpsToDecimalDegrees(raw_longitude, *longdir);
+
+				  valid_count = 0;
+				  xSemaphoreGive(spi_semHandle);
+//				  if(valid_count >= 47){ //Length of NMEA message
+//					  valid_count = 0;
+//					  //Post SPI write semaphore when received full valid message
+//					  //osSemaphoreRelease(SPI_semHandle);
+//
+//				  }
+			  }
+		  }
+		  got_nmea=0;
+	  }
+	//osDelay(1);
+	}
   /* USER CODE END Startuart2Task */
 }
 
@@ -401,10 +528,77 @@ void Startuart2Task(void const * argument)
 void startspi1Task(void const * argument)
 {
   /* USER CODE BEGIN startspi1Task */
+	HAL_StatusTypeDef response = HAL_ERROR;
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	  //osStatus stat = osSemaphoreAcquire(SPI_semHandle, osWaitForever); //Wait for nmea sem to be posted
+	  xSemaphoreTake(spi_semHandle, portMAX_DELAY);
+	  osDelay(1);
+	  //Send over SPI to FRAM
+	  //SPI Initialization **************************
+	  //Write CS Pin high
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	  // Enable write enable latch (allow write operations)
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&WREN, 1);
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+	  // Test bytes to write to EEPROM
+	  spi_mout_buf[0] = 0xAB;
+	  spi_mout_buf[1] = 0xCD;
+	  spi_mout_buf[2] = 0xEF;
+
+	  // Set starting address
+	  spi_addr = 0x00;
+
+	  // Write 3 bytes starting at given address
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&WRITE, 1);
+	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&spi_addr, 2);
+	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	  //IO Driver for output pin enable
+
+	  // Clear buffer
+	  spi_mout_buf[0] = 0;
+	  spi_mout_buf[1] = 0;
+	  spi_mout_buf[2] = 0;
+
+	  // Wait until WIP bit is cleared
+	   spi_wip = 1;
+	   while (spi_wip)
+	   {
+		 // Read status register
+		 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+		 HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&RDSR, 1);
+		 response = HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi_mout_buf, 1);
+		 if (response == HAL_OK) {
+		  printf("Status Reg: %02x \r\n", spi_mout_buf[0]);
+		 } else {
+		  printf("Got error response as %d\r\n", response);
+		 }
+		 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+		 // Mask out WIP bit
+		 spi_wip = spi_mout_buf[0] & 0b00000001;
+	   }
+
+	   // Read the 3 bytes back
+	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	   HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&READ, 1);
+	   HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&spi_addr, 2);
+	   HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+	   // Read status register
+	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	   HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&RDSR, 1);
+	   HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi_mout_buf, 1);
+	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	  //osSemaphoreRelease(UART_semHandle); //Tell UART to gather more data
+	  xSemaphoreGive(uart_semHandle);
+
   }
   /* USER CODE END startspi1Task */
 }

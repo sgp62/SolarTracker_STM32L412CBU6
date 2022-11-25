@@ -1,5 +1,5 @@
 #MicroXplorer Configuration settings - do not modify
-FREERTOS.CountingSemaphores01=spi_sem,2,Dynamic,NULL
+FREERTOS.CountingSemaphores01=spi_sem,1,Dynamic,NULL;uart_sem,1,Dynamic,NULL
 FREERTOS.FootprintOK=true
 FREERTOS.IPParameters=Tasks01,configUSE_COUNTING_SEMAPHORES,configUSE_MUTEXES,configTOTAL_HEAP_SIZE,configUSE_NEWLIB_REENTRANT,FootprintOK,CountingSemaphores01,Mutexes01
 FREERTOS.Mutexes01=spi_mutex,Dynamic,NULL
@@ -9,6 +9,7 @@ FREERTOS.configUSE_COUNTING_SEMAPHORES=1
 FREERTOS.configUSE_MUTEXES=1
 FREERTOS.configUSE_NEWLIB_REENTRANT=1
 File.Version=6
+GPIO.groupedBy=Group By Peripherals
 KeepUserPlacement=false
 Mcu.CPN=STM32L412CBU6
 Mcu.Family=STM32L4
