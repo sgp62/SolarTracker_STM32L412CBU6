@@ -90,6 +90,7 @@ float GpsToDecimalDegrees(char* nmeaPos, char quadrant);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 QueueHandle_t xQueueSerialDataReceived;
+volatile int write_external = 0;
 
 /**
  * Convert NMEA absolute position to decimal degrees
@@ -112,6 +113,10 @@ float GpsToDecimalDegrees(char* nmeaPos, char quadrant)
   }
   return v;
 }
+
+
+
+
 /* USER CODE END 0 */
 
 /**
@@ -195,7 +200,7 @@ int main(void)
   uart2TaskHandle = osThreadCreate(osThread(uart2Task), NULL);
 
   /* definition and creation of spi1Task */
-  osThreadDef(spi1Task, startspi1Task, osPriorityNormal, 0, 512);
+  osThreadDef(spi1Task, startspi1Task, osPriorityHigh, 0, 512); //TODO: See if need a mutex instead
   spi1TaskHandle = osThreadCreate(osThread(spi1Task), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
@@ -396,9 +401,13 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : PB11 */
   GPIO_InitStruct.Pin = GPIO_PIN_11;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 }
 
@@ -436,6 +445,19 @@ void USART_GPS_IRQHandler(void) // Sync and Queue NMEA Sentences
 		}
 	}
 }
+
+/**
+  * @brief EXTI line detection callbacks
+  * @param GPIO_Pin: Specifies the pins connected EXTI line
+  * @retval None
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if(GPIO_Pin == GPIO_PIN_11)
+  {
+    write_external = 1;
+  }
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_Startuart1Task */
@@ -448,11 +470,49 @@ void USART_GPS_IRQHandler(void) // Sync and Queue NMEA Sentences
 void Startuart1Task(void const * argument)
 {
   /* USER CODE BEGIN 5 */
+	static int spi_gps_read_addr = 0;
+	static SerialBuffer gps_ext_buffer;
+	static int statusbuf[8];
+	int num_messages = 4000; //Number of FRAM messages for offset 64B -> 256KB storage.
+	//Code used for external UART write, reading SPI data
   /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+	for(;;)
+	{
+		if (write_external) {
+
+			//Take both semaphores to keep other tasks from running (might be unnecessary bc higher priority)
+			xSemaphoreTake(uart_semHandle, portMAX_DELAY);
+			xSemaphoreTake(spi_semHandle, portMAX_DELAY);
+			spi_gps_read_addr = 0;
+
+			for(int i = 0; i < num_messages; i++){
+
+				//Read 64 bytes of data
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+				HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
+				HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_gps_read_addr, 2);
+				HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, 3);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+				spi_gps_read_addr += 64; //Increase offset to read next data value
+
+				// Read status register
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+				HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
+				HAL_SPI_Receive_IT(&hspi1, (uint8_t *)statusbuf, 1);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+				//Write NMEA message to external UART
+				HAL_UART_Transmit(&huart1, (uint8_t*)&gps_ext_buffer.Buffer, 64, 100);
+			}
+
+			write_external = 0;
+			//Let other tasks continue running
+			xSemaphoreGive(uart_semHandle);
+			xSemaphoreGive(spi_semHandle);
+
+		}
+	}
   /* USER CODE END 5 */
 }
 
@@ -470,6 +530,9 @@ void Startuart2Task(void const * argument)
 	float latitude, longitude;
 
 	char* message_id, *time, *data_valid, *raw_latitude, *raw_longitude, *latdir, *longdir;
+
+	//Set RF Switch to 0 for internal antenna:
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
 
 	/* Infinite loop */
 	for(;;)
@@ -501,6 +564,8 @@ void Startuart2Task(void const * argument)
 				  latitude = GpsToDecimalDegrees(raw_latitude, *latdir);
 				  longitude = GpsToDecimalDegrees(raw_longitude, *longdir);
 
+
+
 				  valid_count = 0;
 				  xSemaphoreGive(spi_semHandle);
 //				  if(valid_count >= 47){ //Length of NMEA message
@@ -529,78 +594,88 @@ void startspi1Task(void const * argument)
 {
   /* USER CODE BEGIN startspi1Task */
 	HAL_StatusTypeDef response = HAL_ERROR;
-  /* Infinite loop */
-  for(;;)
-  {
+
+	//SPI Initialization **************************
+	//Write CS Pin high
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	// Enable write enable latch (allow write operations)
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WREN, 1);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+	// Test bytes to write to EEPROM
+	spi_mout_buf[0] = 0xAB;
+	spi_mout_buf[1] = 0xCD;
+	spi_mout_buf[2] = 0xEF;
+
+	// Write 3 bytes starting at given address
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	//IO Driver for output pin enable
+
+	// Clear buffer
+	spi_mout_buf[0] = 0;
+	spi_mout_buf[1] = 0;
+	spi_mout_buf[2] = 0;
+
+	// Wait until WIP bit is cleared
+	spi_wip = 1;
+	while (spi_wip)
+	{
+	 // Read status register
+	 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	 HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
+	 response = HAL_SPI_Receive_IT(&hspi1, (uint8_t *)spi_mout_buf, 1);
+	 if (response == HAL_OK) {
+	  printf("Status Reg: %02x \r\n", spi_mout_buf[0]);
+	 } else {
+	  printf("Got error response as %d\r\n", response);
+	 }
+	 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+	 // Mask out WIP bit
+	 spi_wip = spi_mout_buf[0] & 0b00000001;
+	}
+
+	// Read the 3 bytes back
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
+	HAL_SPI_Receive_IT(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+	// Read status register
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
+	HAL_SPI_Receive_IT(&hspi1, (uint8_t *)spi_mout_buf, 1);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+	/* Infinite loop */
+	for(;;)
+	{
 	  //osStatus stat = osSemaphoreAcquire(SPI_semHandle, osWaitForever); //Wait for nmea sem to be posted
 	  xSemaphoreTake(spi_semHandle, portMAX_DELAY);
-	  osDelay(1);
+	  //osDelay(1);
+
 	  //Send over SPI to FRAM
-	  //SPI Initialization **************************
-	  //Write CS Pin high
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-	  // Enable write enable latch (allow write operations)
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&WREN, 1);
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-
-	  // Test bytes to write to EEPROM
-	  spi_mout_buf[0] = 0xAB;
-	  spi_mout_buf[1] = 0xCD;
-	  spi_mout_buf[2] = 0xEF;
-
-	  // Set starting address
-	  spi_addr = 0x00;
+	  //osSemaphoreRelease(UART_semHandle); //Tell UART to gather more data
 
 	  // Write 3 bytes starting at given address
 	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&WRITE, 1);
-	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&spi_addr, 2);
-	  HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
+	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
+	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&SerialBufferReceived.Buffer, 64);
 	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-	  //IO Driver for output pin enable
 
-	  // Clear buffer
-	  spi_mout_buf[0] = 0;
-	  spi_mout_buf[1] = 0;
-	  spi_mout_buf[2] = 0;
+	  spi_addr += 64; //Offset within destination device to hold NMEA message
 
-	  // Wait until WIP bit is cleared
-	   spi_wip = 1;
-	   while (spi_wip)
-	   {
-		 // Read status register
-		 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-		 HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&RDSR, 1);
-		 response = HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi_mout_buf, 1);
-		 if (response == HAL_OK) {
-		  printf("Status Reg: %02x \r\n", spi_mout_buf[0]);
-		 } else {
-		  printf("Got error response as %d\r\n", response);
-		 }
-		 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-
-		 // Mask out WIP bit
-		 spi_wip = spi_mout_buf[0] & 0b00000001;
-	   }
-
-	   // Read the 3 bytes back
-	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	   HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&READ, 1);
-	   HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&spi_addr, 2);
-	   HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi_mout_buf, 3);
-	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-
-	   // Read status register
-	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	   HAL_SPI_Transmit_DMA(&hspi1, (uint8_t *)&RDSR, 1);
-	   HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi_mout_buf, 1);
-	   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-	  //osSemaphoreRelease(UART_semHandle); //Tell UART to gather more data
 	  xSemaphoreGive(uart_semHandle);
 
-  }
-  /* USER CODE END startspi1Task */
+	}
+	/* USER CODE END startspi1Task */
 }
 
 /**
