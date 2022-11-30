@@ -71,6 +71,7 @@ const uint8_t SLEEP = 0b10111001;
 const uint8_t RDID = 0b10011111;
 
 SerialBuffer SerialBufferReceived;
+volatile uint32_t tim1_counter = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -169,20 +170,23 @@ int main(void)
   /* USER CODE END RTOS_MUTEX */
 
   /* Create the semaphores(s) */
-  /* definition and creation of spi_sem */
-  osSemaphoreDef(spi_sem);
-  spi_semHandle = osSemaphoreCreate(osSemaphore(spi_sem), 0);
-
-  /* definition and creation of uart_sem */
-  osSemaphoreDef(uart_sem);
-  uart_semHandle = osSemaphoreCreate(osSemaphore(uart_sem), 1);
-
-  /* definition and creation of external_sem */
-  osSemaphoreDef(external_sem);
-  external_semHandle = osSemaphoreCreate(osSemaphore(external_sem), 0);
+//  /* definition and creation of spi_sem */
+//  osSemaphoreDef(spi_sem);
+//  spi_semHandle = osSemaphoreCreate(osSemaphore(spi_sem), 1);
+//
+//  /* definition and creation of uart_sem */
+//  osSemaphoreDef(uart_sem);
+//  uart_semHandle = osSemaphoreCreate(osSemaphore(uart_sem), 1);
+//
+//  /* definition and creation of external_sem */
+//  osSemaphoreDef(external_sem);
+//  external_semHandle = osSemaphoreCreate(osSemaphore(external_sem), 1);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  spi_semHandle = xSemaphoreCreateCounting( 1, 0 );
+  uart_semHandle = xSemaphoreCreateCounting( 1, 1 );
+  external_semHandle = xSemaphoreCreateCounting( 1, 0 );
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -405,7 +409,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_8, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : PA0 PA1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB8 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_8;
@@ -470,7 +484,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if(GPIO_Pin == GPIO_PIN_11)
   {
-	  xSemaphoreGive(external_semHandle);
+	  xSemaphoreGiveFromISR(external_semHandle, NULL);
   }
 }
 
@@ -564,8 +578,15 @@ void Startuart2Task(void const * argument)
 			  nmea_header[c] = SerialBufferReceived.Buffer[c];
 		  }
 		  if(!strcmp(nmea_header, "$GPRMC")){
+			  if(SerialBufferReceived.Buffer[18] == 'V'){
+				  //No fix, turn off LED
+				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+
+			  }
 			  if(SerialBufferReceived.Buffer[18] == 'A'){
-				  //Got a fix0000
+				  //Got a fix, turn on LED
+				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+
 				  message_id = SerialBufferReceived.Buffer;
 				  time = FIND_AND_NUL(message_id, time, ',');
 				  data_valid = FIND_AND_NUL(time, data_valid, ',');
@@ -580,7 +601,11 @@ void Startuart2Task(void const * argument)
 
 
 				  valid_count = 0;
-				  xSemaphoreGive(spi_semHandle);
+				  if(tim1_counter > 1000){ //Post SPI write semaphore every 1s there is a valid message
+					  xSemaphoreGive(spi_semHandle);
+					  tim1_counter = 0;
+				  }
+
 //				  if(valid_count >= 47){ //Length of NMEA message
 //					  valid_count = 0;
 //					  //Post SPI write semaphore when received full valid message
@@ -685,6 +710,9 @@ void startspi1Task(void const * argument)
 
 	  spi_addr += 64; //Offset within destination device to hold NMEA message
 
+	  //Turn on LED to signal SPI write happened
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+
 	  xSemaphoreGive(uart_semHandle);
 
 	}
@@ -702,7 +730,7 @@ void startspi1Task(void const * argument)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
+	tim1_counter++; //Incrementing at 1kHz (1000 in 1 second)
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1) {
     HAL_IncTick();
