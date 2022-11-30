@@ -57,6 +57,7 @@ osThreadId spi1TaskHandle;
 osMutexId spi_mutexHandle;
 osSemaphoreId spi_semHandle;
 osSemaphoreId uart_semHandle;
+osSemaphoreId external_semHandle;
 /* USER CODE BEGIN PV */
 
 // FM25V02A FRAM SPI Commands
@@ -90,7 +91,6 @@ float GpsToDecimalDegrees(char* nmeaPos, char quadrant);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 QueueHandle_t xQueueSerialDataReceived;
-volatile int write_external = 0;
 
 /**
  * Convert NMEA absolute position to decimal degrees
@@ -171,11 +171,15 @@ int main(void)
   /* Create the semaphores(s) */
   /* definition and creation of spi_sem */
   osSemaphoreDef(spi_sem);
-  spi_semHandle = osSemaphoreCreate(osSemaphore(spi_sem), 1);
+  spi_semHandle = osSemaphoreCreate(osSemaphore(spi_sem), 0);
 
   /* definition and creation of uart_sem */
   osSemaphoreDef(uart_sem);
   uart_semHandle = osSemaphoreCreate(osSemaphore(uart_sem), 1);
+
+  /* definition and creation of external_sem */
+  osSemaphoreDef(external_sem);
+  external_semHandle = osSemaphoreCreate(osSemaphore(external_sem), 0);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -200,7 +204,7 @@ int main(void)
   uart2TaskHandle = osThreadCreate(osThread(uart2Task), NULL);
 
   /* definition and creation of spi1Task */
-  osThreadDef(spi1Task, startspi1Task, osPriorityHigh, 0, 512); //TODO: See if need a mutex instead
+  osThreadDef(spi1Task, startspi1Task, osPriorityNormal, 0, 512);
   spi1TaskHandle = osThreadCreate(osThread(spi1Task), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
@@ -238,10 +242,16 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE|RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = 0;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
@@ -264,6 +274,10 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
+  /** Enable MSI Auto calibration
+  */
+  HAL_RCCEx_EnableMSIPLLMode();
 }
 
 /**
@@ -386,6 +400,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
@@ -455,9 +470,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if(GPIO_Pin == GPIO_PIN_11)
   {
-    write_external = 1;
+	  xSemaphoreGive(external_semHandle);
   }
 }
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_Startuart1Task */
@@ -478,40 +494,37 @@ void Startuart1Task(void const * argument)
   /* Infinite loop */
 	for(;;)
 	{
-		if (write_external) {
+		xSemaphoreTake(external_semHandle, portMAX_DELAY);
+		//Take both semaphores to keep other tasks from running (might be unnecessary bc higher priority)
+		xSemaphoreTake(uart_semHandle, portMAX_DELAY);
+		xSemaphoreTake(spi_semHandle, portMAX_DELAY);
+		spi_gps_read_addr = 0;
 
-			//Take both semaphores to keep other tasks from running (might be unnecessary bc higher priority)
-			xSemaphoreTake(uart_semHandle, portMAX_DELAY);
-			xSemaphoreTake(spi_semHandle, portMAX_DELAY);
-			spi_gps_read_addr = 0;
+		for(int i = 0; i < num_messages; i++){
 
-			for(int i = 0; i < num_messages; i++){
+			//Read 64 bytes of data
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
+			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_gps_read_addr, 2);
+			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, 3);
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
-				//Read 64 bytes of data
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-				HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
-				HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_gps_read_addr, 2);
-				HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, 3);
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+			spi_gps_read_addr += 64; //Increase offset to read next data value
 
-				spi_gps_read_addr += 64; //Increase offset to read next data value
+			// Read status register
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
+			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)statusbuf, 1);
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
-				// Read status register
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-				HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
-				HAL_SPI_Receive_IT(&hspi1, (uint8_t *)statusbuf, 1);
-				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-
-				//Write NMEA message to external UART
-				HAL_UART_Transmit(&huart1, (uint8_t*)&gps_ext_buffer.Buffer, 64, 100);
-			}
-
-			write_external = 0;
-			//Let other tasks continue running
-			xSemaphoreGive(uart_semHandle);
-			xSemaphoreGive(spi_semHandle);
-
+			//Write NMEA message to external UART
+			HAL_UART_Transmit(&huart1, (uint8_t*)&gps_ext_buffer.Buffer, 64, 100);
 		}
+
+		//Let other tasks continue running
+		xSemaphoreGive(uart_semHandle);
+		xSemaphoreGive(spi_semHandle);
+
 	}
   /* USER CODE END 5 */
 }
@@ -531,8 +544,8 @@ void Startuart2Task(void const * argument)
 
 	char* message_id, *time, *data_valid, *raw_latitude, *raw_longitude, *latdir, *longdir;
 
-	//Set RF Switch to 0 for internal antenna:
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+	//Set RF Switch to 1 for external antenna:
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
 
 	/* Infinite loop */
 	for(;;)
@@ -675,7 +688,7 @@ void startspi1Task(void const * argument)
 	  xSemaphoreGive(uart_semHandle);
 
 	}
-	/* USER CODE END startspi1Task */
+  /* USER CODE END startspi1Task */
 }
 
 /**
