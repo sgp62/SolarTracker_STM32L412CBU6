@@ -154,9 +154,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   //Enable Uart Interrupts
-  HAL_NVIC_SetPriority(USART_GPS_IRQn, 7, 6);
+  HAL_NVIC_SetPriority(USART_GPS_IRQn, 12, 0);
   HAL_NVIC_EnableIRQ(USART_GPS_IRQn);
   USART_GPS->CR1 |= USART_CR1_RXNEIE; // Enable Interrupt
+  HAL_NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
 
   /* USER CODE END 2 */
 
@@ -553,7 +554,6 @@ void Startuart1Task(void const * argument)
 void Startuart2Task(void const * argument)
 {
   /* USER CODE BEGIN Startuart2Task */
-	static uint8_t valid_count = 0;
 	float latitude, longitude;
 
 	char* message_id, *time, *data_valid, *raw_latitude, *raw_longitude, *latdir, *longdir;
@@ -566,26 +566,22 @@ void Startuart2Task(void const * argument)
 	{
 	  if(uxQueueMessagesWaitingFromISR(xQueueSerialDataReceived)>0)
 	  {
-		  if(valid_count == 0) {
-			  //osSemaphoreAcquire(UART_semHandle, osWaitForever); //Grab semaphore for new message
-			  xSemaphoreTake(uart_semHandle, portMAX_DELAY);
-		  }
+
 
 		  xQueueReceive(xQueueSerialDataReceived,&(SerialBufferReceived),1);
-		  valid_count++;
 		  //Fill and check header
 		  for(int c = 0; c < 6; c++){
 			  nmea_header[c] = SerialBufferReceived.Buffer[c];
 		  }
 		  if(!strcmp(nmea_header, "$GPRMC")){
 			  if(SerialBufferReceived.Buffer[18] == 'V'){
-				  //No fix, turn off LED
-				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+				  //No fix, turn on LED
+				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
 
 			  }
 			  if(SerialBufferReceived.Buffer[18] == 'A'){
-				  //Got a fix, turn on LED
-				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+				  //Got a fix, turn off LED
+				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
 
 				  message_id = SerialBufferReceived.Buffer;
 				  time = FIND_AND_NUL(message_id, time, ',');
@@ -599,11 +595,10 @@ void Startuart2Task(void const * argument)
 				  longitude = GpsToDecimalDegrees(raw_longitude, *longdir);
 
 
-
-				  valid_count = 0;
 				  if(tim1_counter > 1000){ //Post SPI write semaphore every 1s there is a valid message
 					  xSemaphoreGive(spi_semHandle);
 					  tim1_counter = 0;
+					  xSemaphoreTake(uart_semHandle, portMAX_DELAY); //Wait until SPI is posted
 				  }
 
 //				  if(valid_count >= 47){ //Length of NMEA message
@@ -701,7 +696,7 @@ void startspi1Task(void const * argument)
 	  //Send over SPI to FRAM
 	  //osSemaphoreRelease(UART_semHandle); //Tell UART to gather more data
 
-	  // Write 3 bytes starting at given address
+	  // Write 64 bytes starting at given address
 	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
 	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
 	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
@@ -710,11 +705,13 @@ void startspi1Task(void const * argument)
 
 	  spi_addr += 64; //Offset within destination device to hold NMEA message
 
-	  //Turn on LED to signal SPI write happened
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
 
 	  xSemaphoreGive(uart_semHandle);
 
+	  //Blink LED to signal SPI write happened
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+	  vTaskDelay( 200 / portTICK_PERIOD_MS );
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
 	}
   /* USER CODE END startspi1Task */
 }
