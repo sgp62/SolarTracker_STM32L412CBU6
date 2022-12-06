@@ -34,6 +34,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define NMEA_LEN	72
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -71,6 +72,7 @@ const uint8_t SLEEP = 0b10111001;
 const uint8_t RDID = 0b10011111;
 
 SerialBuffer SerialBufferReceived;
+SerialBuffer test_spi_buf;
 volatile uint32_t tim1_counter = 0;
 /* USER CODE END PV */
 
@@ -504,7 +506,7 @@ void Startuart1Task(void const * argument)
 	static int spi_gps_read_addr = 0;
 	static SerialBuffer gps_ext_buffer;
 	static int statusbuf[8];
-	int num_messages = 4000; //Number of FRAM messages for offset 64B -> 256KB storage.
+	int num_messages = 500; //Number of FRAM messages for offset 72B -> 256KB storage =
 	//Code used for external UART write, reading SPI data
   /* Infinite loop */
 	for(;;)
@@ -518,14 +520,14 @@ void Startuart1Task(void const * argument)
 
 		for(int i = 0; i < num_messages; i++){
 
-			//Read 64 bytes of data
+			//Read NMEA_LEN bytes of data
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
 			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
 			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_gps_read_addr, 2);
-			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, 64);
+			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, NMEA_LEN);
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
-			spi_gps_read_addr += 64; //Increase offset to read next data value
+			spi_gps_read_addr += NMEA_LEN; //Increase offset to read next data value
 
 			// Read status register
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
@@ -534,7 +536,7 @@ void Startuart1Task(void const * argument)
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 			//Write NMEA message to external UART
-			HAL_UART_Transmit(&huart1, (uint8_t*)&gps_ext_buffer.Buffer, 64, 100);
+			HAL_UART_Transmit(&huart1, (uint8_t*)&gps_ext_buffer.Buffer, NMEA_LEN, 100);
 		}
 
 		//Let other tasks continue running
@@ -685,28 +687,41 @@ void startspi1Task(void const * argument)
 	for(;;)
 	{
 	  //osStatus stat = osSemaphoreAcquire(SPI_semHandle, osWaitForever); //Wait for nmea sem to be posted
-	  xSemaphoreTake(spi_semHandle, portMAX_DELAY);
+		xSemaphoreTake(spi_semHandle, portMAX_DELAY);
 	  //osDelay(1);
 
 	  //Send over SPI to FRAM
 	  //osSemaphoreRelease(UART_semHandle); //Tell UART to gather more data
+		//Set Write enable latch
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WREN, 1);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
-	  // Write 64 bytes starting at given address
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
-	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
-	  HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&SerialBufferReceived.Buffer, 64);
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+		// Write 64 bytes starting at given address
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
+		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
+		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&SerialBufferReceived.Buffer, NMEA_LEN);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
-	  spi_addr += 64; //Offset within destination device to hold NMEA message
+		// TEST READ ECHO
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
+		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
+		HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&test_spi_buf.Buffer, NMEA_LEN);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+		spi_addr += NMEA_LEN; //Offset within destination device to hold NMEA message
+
+		if(spi_addr > 0x7FFF) spi_addr = 0;
 
 
-	  xSemaphoreGive(uart_semHandle);
+		xSemaphoreGive(uart_semHandle);
 
-	  //Blink LED to signal SPI write happened
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
-	  vTaskDelay( 200 / portTICK_PERIOD_MS );
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
+		//Blink LED to signal SPI write happened
+		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
+		vTaskDelay( 200 / portTICK_PERIOD_MS );
+		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
 	}
   /* USER CODE END startspi1Task */
 }

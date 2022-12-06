@@ -8,11 +8,11 @@ print("After connect")
 try:
     while True:
         print("in loop")
-        s = ser.read(64) #Read NMEA message
+        s = ser.read(72) #Read NMEA message
         # with open("nmea_output.txt", "wb") as binary_file:
         #     # Write bytes to file
         #     binary_file.write(s)
-        print(s.decode('utf-8'))
+        print(str(s))
 except KeyboardInterrupt:
     ser.close()
     quit()
