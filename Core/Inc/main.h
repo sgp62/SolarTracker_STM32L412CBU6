@@ -47,19 +47,19 @@ typedef struct
 /* User can use this section to tailor USARTx/UARTx instance used and associated
    resources */
 /* Definition for USARTx clock resources */
-#define USARTx                           USART2
-#define USARTx_CLK_ENABLE()              __HAL_RCC_USART2_CLK_ENABLE()
+#define USARTx                           USART1
+#define USARTx_CLK_ENABLE()              __HAL_RCC_USART1_CLK_ENABLE()
 #define USARTx_RX_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOA_CLK_ENABLE()
 #define USARTx_TX_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOA_CLK_ENABLE()
 
-#define USARTx_FORCE_RESET()             __HAL_RCC_USART2_FORCE_RESET()
-#define USARTx_RELEASE_RESET()           __HAL_RCC_USART2_RELEASE_RESET()
+#define USARTx_FORCE_RESET()             __HAL_RCC_USART1_FORCE_RESET()
+#define USARTx_RELEASE_RESET()           __HAL_RCC_USART1_RELEASE_RESET()
 
 /* Definition for USARTx Pins */
-#define USARTx_TX_PIN                    GPIO_PIN_2
+#define USARTx_TX_PIN                    GPIO_PIN_9
 #define USARTx_TX_GPIO_PORT              GPIOA
 #define USARTx_TX_AF                     GPIO_AF7_USART2
-#define USARTx_RX_PIN                    GPIO_PIN_3
+#define USARTx_RX_PIN                    GPIO_PIN_10
 #define USARTx_RX_GPIO_PORT              GPIOA
 #define USARTx_RX_AF                     GPIO_AF7_USART2
 
@@ -69,9 +69,9 @@ typedef struct
 #define PROCESS_PARSER_BUFFER_SIZE 600
 static char current_parser_buf[ PROCESS_PARSER_BUFFER_SIZE ];
 
-#define USART_GPS USART2//LPUART1
-#define USART_GPS_IRQn USART2_IRQn//LPUART1_IRQn
-#define USART_GPS_IRQHandler USART2_IRQHandler//LPUART1_IRQHandler
+#define USART_GPS USART1//LPUART1
+#define USART_GPS_IRQn USART1_IRQn//LPUART1_IRQn
+#define USART_GPS_IRQHandler USART1_IRQHandler//LPUART1_IRQHandler
 
 #ifdef USART_CR1_TXEIE_TXFNFIE // FIFO Support (L4R9)
 #define USART_CR1_TXEIE USART_CR1_TXEIE_TXFNFIE

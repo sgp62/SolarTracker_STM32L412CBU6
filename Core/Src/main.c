@@ -201,7 +201,7 @@ int main(void)
 
   /* Create the thread(s) */
   /* definition and creation of uart1Task */
-  osThreadDef(uart1Task, Startuart1Task, osPriorityNormal, 0, 512);
+  osThreadDef(uart1Task, Startuart1Task, osPriorityHigh, 0, 512);
   uart1TaskHandle = osThreadCreate(osThread(uart1Task), NULL);
 
   /* definition and creation of uart2Task */
@@ -341,7 +341,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 9600;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
@@ -511,8 +511,9 @@ void Startuart1Task(void const * argument)
 	{
 		xSemaphoreTake(external_semHandle, portMAX_DELAY);
 		//Take both semaphores to keep other tasks from running (might be unnecessary bc higher priority)
-		xSemaphoreTake(uart_semHandle, portMAX_DELAY);
-		xSemaphoreTake(spi_semHandle, portMAX_DELAY);
+		//xSemaphoreTake(uart_semHandle, portMAX_DELAY);
+		//xSemaphoreTake(spi_semHandle, portMAX_DELAY);
+		USART_GPS->CR1 &= ~(USART_CR1_RXNEIE); // Disable UART Interrupt
 		spi_gps_read_addr = 0;
 
 		for(int i = 0; i < num_messages; i++){
@@ -521,7 +522,7 @@ void Startuart1Task(void const * argument)
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
 			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
 			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_gps_read_addr, 2);
-			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, 3);
+			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, 64);
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 			spi_gps_read_addr += 64; //Increase offset to read next data value
@@ -537,8 +538,9 @@ void Startuart1Task(void const * argument)
 		}
 
 		//Let other tasks continue running
-		xSemaphoreGive(uart_semHandle);
-		xSemaphoreGive(spi_semHandle);
+		USART_GPS->CR1 |= USART_CR1_RXNEIE; // Enable UART Interrupt
+		//xSemaphoreGive(uart_semHandle);
+		//xSemaphoreGive(spi_semHandle);
 
 	}
   /* USER CODE END 5 */
@@ -558,8 +560,8 @@ void Startuart2Task(void const * argument)
 
 	char* message_id, *time, *data_valid, *raw_latitude, *raw_longitude, *latdir, *longdir;
 
-	//Set RF Switch to 1 for external antenna:
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+	//Set RF Switch to 0 for internal antenna:
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
 
 	/* Infinite loop */
 	for(;;)
@@ -600,13 +602,6 @@ void Startuart2Task(void const * argument)
 					  tim1_counter = 0;
 					  xSemaphoreTake(uart_semHandle, portMAX_DELAY); //Wait until SPI is posted
 				  }
-
-//				  if(valid_count >= 47){ //Length of NMEA message
-//					  valid_count = 0;
-//					  //Post SPI write semaphore when received full valid message
-//					  //osSemaphoreRelease(SPI_semHandle);
-//
-//				  }
 			  }
 		  }
 		  got_nmea=0;
