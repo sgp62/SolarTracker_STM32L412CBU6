@@ -522,17 +522,17 @@ void Startuart1Task(void const * argument)
 
 			//Read NMEA_LEN bytes of data
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
-			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_gps_read_addr, 2);
-			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, NMEA_LEN);
+			HAL_SPI_Transmit(&hspi1, (uint8_t *)&READ, 1, 100);
+			HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_gps_read_addr, 2, 100);
+			HAL_SPI_Receive(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, NMEA_LEN, 100);
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 			spi_gps_read_addr += NMEA_LEN; //Increase offset to read next data value
 
 			// Read status register
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-			HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
-			HAL_SPI_Receive_IT(&hspi1, (uint8_t *)statusbuf, 1);
+			HAL_SPI_Transmit(&hspi1, (uint8_t *)&RDSR, 1, 100);
+			HAL_SPI_Receive(&hspi1, (uint8_t *)statusbuf, 1, 100);
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 			//Write NMEA message to external UART
@@ -581,22 +581,22 @@ void Startuart2Task(void const * argument)
 			  if(SerialBufferReceived.Buffer[18] == 'V'){
 				  //No fix, turn on LED
 				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-
-			  }
-			  if(SerialBufferReceived.Buffer[18] == 'A'){
-				  //Got a fix, turn off LED
-				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-
-				  message_id = SerialBufferReceived.Buffer;
-				  time = FIND_AND_NUL(message_id, time, ',');
-				  data_valid = FIND_AND_NUL(time, data_valid, ',');
-				  raw_latitude = FIND_AND_NUL(data_valid, raw_latitude, ',');
-				  latdir = FIND_AND_NUL(raw_latitude, latdir, ',');
-				  raw_longitude = FIND_AND_NUL(latdir, raw_longitude, ',');
-				  longdir = FIND_AND_NUL(raw_longitude, longdir, ',');
-
-				  latitude = GpsToDecimalDegrees(raw_latitude, *latdir);
-				  longitude = GpsToDecimalDegrees(raw_longitude, *longdir);
+//
+//			  }
+//			  if(SerialBufferReceived.Buffer[18] == 'A'){
+//				  //Got a fix, turn off LED
+//				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+//
+//				  message_id = SerialBufferReceived.Buffer;
+//				  time = FIND_AND_NUL(message_id, time, ',');
+//				  data_valid = FIND_AND_NUL(time, data_valid, ',');
+//				  raw_latitude = FIND_AND_NUL(data_valid, raw_latitude, ',');
+//				  latdir = FIND_AND_NUL(raw_latitude, latdir, ',');
+//				  raw_longitude = FIND_AND_NUL(latdir, raw_longitude, ',');
+//				  longdir = FIND_AND_NUL(raw_longitude, longdir, ',');
+//
+//				  latitude = GpsToDecimalDegrees(raw_latitude, *latdir);
+//				  longitude = GpsToDecimalDegrees(raw_longitude, *longdir);
 
 
 				  if(tim1_counter > 1000){ //Post SPI write semaphore every 1s there is a valid message
@@ -630,7 +630,7 @@ void startspi1Task(void const * argument)
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 	// Enable write enable latch (allow write operations)
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WREN, 1);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&WREN, 1, 100);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 	// Test bytes to write to EEPROM
@@ -640,9 +640,9 @@ void startspi1Task(void const * argument)
 
 	// Write 3 bytes starting at given address
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&WRITE, 1, 100);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)spi_mout_buf, 3, 100);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 	//IO Driver for output pin enable
 
@@ -657,8 +657,8 @@ void startspi1Task(void const * argument)
 	{
 	 // Read status register
 	 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	 HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
-	 response = HAL_SPI_Receive_IT(&hspi1, (uint8_t *)spi_mout_buf, 1);
+	 HAL_SPI_Transmit(&hspi1, (uint8_t *)&RDSR, 1, 100);
+	 response = HAL_SPI_Receive(&hspi1, (uint8_t *)spi_mout_buf, 1, 100);
 	 if (response == HAL_OK) {
 	  printf("Status Reg: %02x \r\n", spi_mout_buf[0]);
 	 } else {
@@ -672,15 +672,15 @@ void startspi1Task(void const * argument)
 
 	// Read the 3 bytes back
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
-	HAL_SPI_Receive_IT(&hspi1, (uint8_t *)spi_mout_buf, 3);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&READ, 1, 100);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+	HAL_SPI_Receive(&hspi1, (uint8_t *)spi_mout_buf, 3, 100);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 	// Read status register
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&RDSR, 1);
-	HAL_SPI_Receive_IT(&hspi1, (uint8_t *)spi_mout_buf, 1);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&RDSR, 1, 100);
+	HAL_SPI_Receive(&hspi1, (uint8_t *)spi_mout_buf, 1, 100);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 	/* Infinite loop */
@@ -699,16 +699,16 @@ void startspi1Task(void const * argument)
 
 		// Write 64 bytes starting at given address
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WRITE, 1);
-		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
-		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&SerialBufferReceived.Buffer, NMEA_LEN);
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&WRITE, 1, 100);
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&SerialBufferReceived.Buffer, NMEA_LEN, 100);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 		// TEST READ ECHO
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&READ, 1);
-		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&spi_addr, 2);
-		HAL_SPI_Receive_IT(&hspi1, (uint8_t *)&test_spi_buf.Buffer, NMEA_LEN);
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&READ, 1, 100);
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+		HAL_SPI_Receive(&hspi1, (uint8_t *)&test_spi_buf.Buffer, NMEA_LEN, 100);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 		spi_addr += NMEA_LEN; //Offset within destination device to hold NMEA message
