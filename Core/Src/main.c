@@ -34,7 +34,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NMEA_LEN	72
+#define NMEA_LEN	80
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -310,7 +310,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16; //TODO Check if this does anything
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -503,10 +503,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 void Startuart1Task(void const * argument)
 {
   /* USER CODE BEGIN 5 */
-	static int spi_gps_read_addr = 0;
+	static uint16_t spi_gps_read_addr = 0;
 	static SerialBuffer gps_ext_buffer;
 	static int statusbuf[8];
-	int num_messages = 500; //Number of FRAM messages for offset 72B -> 256KB storage =
+	int num_messages = 390; //Number of FRAM messages for offset 72B -> 256KB storage = 390
 	//Code used for external UART write, reading SPI data
   /* Infinite loop */
 	for(;;)
@@ -529,15 +529,16 @@ void Startuart1Task(void const * argument)
 
 			spi_gps_read_addr += NMEA_LEN; //Increase offset to read next data value
 
-			// Read status register
-			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-			HAL_SPI_Transmit(&hspi1, (uint8_t *)&RDSR, 1, 100);
-			HAL_SPI_Receive(&hspi1, (uint8_t *)statusbuf, 1, 100);
-			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+//			// Read status register
+//			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+//			HAL_SPI_Transmit(&hspi1, (uint8_t *)&RDSR, 1, 100);
+//			HAL_SPI_Receive(&hspi1, (uint8_t *)statusbuf, 1, 100);
+//			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 			//Write NMEA message to external UART
 			HAL_UART_Transmit(&huart1, (uint8_t*)&gps_ext_buffer.Buffer, NMEA_LEN, 100);
 		}
+
 
 		//Let other tasks continue running
 		USART_GPS->CR1 |= USART_CR1_RXNEIE; // Enable UART Interrupt
@@ -581,11 +582,11 @@ void Startuart2Task(void const * argument)
 			  if(SerialBufferReceived.Buffer[18] == 'V'){
 				  //No fix, turn on LED
 				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-//
-//			  }
-//			  if(SerialBufferReceived.Buffer[18] == 'A'){
-//				  //Got a fix, turn off LED
-//				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+
+			  }
+			  if(SerialBufferReceived.Buffer[18] == 'A'){
+				  //Got a fix, turn off LED
+				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
 //
 //				  message_id = SerialBufferReceived.Buffer;
 //				  time = FIND_AND_NUL(message_id, time, ',');
@@ -599,7 +600,7 @@ void Startuart2Task(void const * argument)
 //				  longitude = GpsToDecimalDegrees(raw_longitude, *longdir);
 
 
-				  if(tim1_counter > 1000){ //Post SPI write semaphore every 1s there is a valid message
+				  if(tim1_counter > 5000){ //Post SPI write semaphore every 5s there is a valid message
 					  xSemaphoreGive(spi_semHandle);
 					  tim1_counter = 0;
 					  xSemaphoreTake(uart_semHandle, portMAX_DELAY); //Wait until SPI is posted

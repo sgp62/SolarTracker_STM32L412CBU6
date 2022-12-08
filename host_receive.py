@@ -2,18 +2,25 @@ import serial
 import time
 
 print("Before connect")
-ser = serial.Serial('COM4', 9600, timeout=100)
+ser = serial.Serial('COM4', 9600)
 print("After connect")
 
+t = int(time.time())
+print(t)
 try:
+    print("reading at the start")
+    #start = ser.read_until(b'$GPRMC')
     while True:
         print("in loop")
+        #start = bytearray(ser.read_until(b'$GPRMC'))
+        #msg = bytearray(ser.read_until(b'$'))
+        #msg = start[-6:0] + msg #Adds $GPRMC to front of msg
         s = ser.read(72) #Read NMEA message
-        # with open("nmea_output.txt", "wb") as binary_file:
-        #     # Write bytes to file
-        #     binary_file.write(s)
+        # Write bytes to file
+        with open("nmea_output"+str(t)+".txt", "ab") as binary_file:
+            binary_file.write(s)
+            binary_file.write(b'\n')
         print(str(s))
 except KeyboardInterrupt:
     ser.close()
     quit()
-
