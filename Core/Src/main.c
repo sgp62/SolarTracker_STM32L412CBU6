@@ -310,7 +310,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16; //TODO Check if this does anything
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256; //TODO Check if this does anything
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -508,6 +508,8 @@ void Startuart1Task(void const * argument)
 	static int statusbuf[8];
 	int num_messages = 390; //Number of FRAM messages for offset 72B -> 256KB storage = 390
 	//Code used for external UART write, reading SPI data
+	uint8_t addr_msb = 0;
+	uint8_t addr_lsb = 0;
   /* Infinite loop */
 	for(;;)
 	{
@@ -518,12 +520,17 @@ void Startuart1Task(void const * argument)
 		USART_GPS->CR1 &= ~(USART_CR1_RXNEIE); // Disable UART Interrupt
 		spi_gps_read_addr = 0;
 
+
 		for(int i = 0; i < num_messages; i++){
+
+			addr_msb = (spi_gps_read_addr >> 8) & 0xFF;
+			addr_lsb = spi_gps_read_addr & 0xFF;
 
 			//Read NMEA_LEN bytes of data
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
 			HAL_SPI_Transmit(&hspi1, (uint8_t *)&READ, 1, 100);
-			HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_gps_read_addr, 2, 100);
+			HAL_SPI_Transmit(&hspi1, (uint8_t *)&addr_msb, 1, 100); //Send Address MSBs
+			HAL_SPI_Transmit(&hspi1, (uint8_t *)&addr_lsb, 1, 100); //Send Address LSBs
 			HAL_SPI_Receive(&hspi1, (uint8_t *)&gps_ext_buffer.Buffer, NMEA_LEN, 100);
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
@@ -684,6 +691,9 @@ void startspi1Task(void const * argument)
 	HAL_SPI_Receive(&hspi1, (uint8_t *)spi_mout_buf, 1, 100);
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
+	uint8_t addr_msb = 0;
+	uint8_t addr_lsb = 0;
+
 	/* Infinite loop */
 	for(;;)
 	{
@@ -698,19 +708,23 @@ void startspi1Task(void const * argument)
 		HAL_SPI_Transmit_IT(&hspi1, (uint8_t *)&WREN, 1);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
+		addr_msb = (spi_addr >> 8) & 0xFF;
+		addr_lsb = spi_addr & 0xFF;
 		// Write 64 bytes starting at given address
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
 		HAL_SPI_Transmit(&hspi1, (uint8_t *)&WRITE, 1, 100);
-		HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+//		HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&addr_msb, 1, 100); //Send Address MSBs
+		HAL_SPI_Transmit(&hspi1, (uint8_t *)&addr_lsb, 1, 100); //Send Address LSBs
 		HAL_SPI_Transmit(&hspi1, (uint8_t *)&SerialBufferReceived.Buffer, NMEA_LEN, 100);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
-		// TEST READ ECHO
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-		HAL_SPI_Transmit(&hspi1, (uint8_t *)&READ, 1, 100);
-		HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
-		HAL_SPI_Receive(&hspi1, (uint8_t *)&test_spi_buf.Buffer, NMEA_LEN, 100);
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+//		// TEST READ ECHO
+//		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+//		HAL_SPI_Transmit(&hspi1, (uint8_t *)&READ, 1, 100);
+//		HAL_SPI_Transmit(&hspi1, (uint8_t *)&spi_addr, 2, 100);
+//		HAL_SPI_Receive(&hspi1, (uint8_t *)&test_spi_buf.Buffer, NMEA_LEN, 100);
+//		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
 
 		spi_addr += NMEA_LEN; //Offset within destination device to hold NMEA message
 

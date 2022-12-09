@@ -15,7 +15,7 @@ try:
         #start = bytearray(ser.read_until(b'$GPRMC'))
         #msg = bytearray(ser.read_until(b'$'))
         #msg = start[-6:0] + msg #Adds $GPRMC to front of msg
-        s = ser.read(72) #Read NMEA message
+        s = ser.read(80) #Read NMEA message
         # Write bytes to file
         with open("nmea_output"+str(t)+".txt", "ab") as binary_file:
             binary_file.write(s)
