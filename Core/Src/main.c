@@ -590,10 +590,10 @@ void Startuart2Task(void const * argument)
 				  //No fix, turn on LED
 				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
 
-			  }
-			  if(SerialBufferReceived.Buffer[18] == 'A'){
-				  //Got a fix, turn off LED
-				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+//			  }
+//			  if(SerialBufferReceived.Buffer[18] == 'A'){
+//				  //Got a fix, turn off LED
+//				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
 //
 //				  message_id = SerialBufferReceived.Buffer;
 //				  time = FIND_AND_NUL(message_id, time, ',');

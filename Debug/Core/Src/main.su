@@ -5,7 +5,7 @@
 ../Core/Src/main.c:335:13:MX_USART1_UART_Init	8	static
 ../Core/Src/main.c:370:13:MX_USART2_UART_Init	8	static
 ../Core/Src/main.c:405:13:MX_GPIO_Init	40	static
-../Core/Src/main.c:447:6:USART1_IRQHandler	16	static
+../Core/Src/main.c:447:6:USART2_IRQHandler	16	static
 ../Core/Src/main.c:486:6:HAL_GPIO_EXTI_Callback	16	static
 ../Core/Src/main.c:503:6:Startuart1Task	32	static
 ../Core/Src/main.c:566:6:Startuart2Task	24	static
